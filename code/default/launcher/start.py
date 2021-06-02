@@ -24,6 +24,10 @@ try:
 except:
     pass
 
+# 为了及时更新,整个程序目录都会改变
+# 但是用户自己的配置文件不可以改动
+# 因此在程序目录的父目录建立用户数据目录
+
 current_path=os.path.dirname(os.path.abspath(__file__))
 default_path=os.path.abspath(os.path.join(current_path,os.pardir))
 data_path=os.path.abspath(os.path.join(default_path,os.pardir,os.pardir,'data'))
@@ -31,12 +35,7 @@ data_launcher_path=os.path.join(data_path,'launcher')
 noarch_lib=os.path.abspath(os.path.join(default_path,'lib','noarch'))
 sys.path.append(noarch_lib)
 running_file=os.path.join(data_launcher_path,"Running.Lck")
-log_file=os.path.join(data_launcher_path,"launcher.log")
 data_gae_proxy_path=os.path.join(data_path,'gae_proxy')
-
-# 为了及时更新,整个程序目录都会改变
-# 但是用户自己的配置文件不可以改动
-# 因此在程序目录的父目录建立用户数据目录
 
 def creat_data_path():
     if not os.path.isdir(data_path):
@@ -50,11 +49,13 @@ creat_data_path()
 
 # 错误日志
 from xlog import getLogger
+log_file=os.path.join(data_launcher_path,"launcher.log")
 xlog=getLogger("launcher",file_name=log_file)
 
 def uncaughtExceptionHandler(etype, value, tb):
     if etype==KeyboardInterrupt: # Ctrl+C on console
         xlog.warn("Keyboard Interrrupt, exiting...")
+        # 第一次出现的模块 module_init
         module_init.stop_all()
         os._exit(0)
     exc_info=''.join(traceback.format_exception(etype,value,tb))
@@ -69,6 +70,8 @@ def uncaughtExceptionHandler(etype, value, tb):
 sys.excepthook=uncaughtExceptionHandler
 
 has_desktop =True
+
+# 尝试引入OpenSSL
 
 def unload(module):
     for m in list(sys.modules.keys()):
@@ -113,6 +116,7 @@ import download_modules
 def exit_handler():
     print('Stopping all modules before exit!')
     module_init.stop_all()
+    #出现的第2个模块
     web_control.stop()
     
 atexit.register(exit_handler)
@@ -128,6 +132,7 @@ def main():
 
     if sys.platform=="win32" and config.show_compat_suggest:
         import win_compat_suggest
+        # 模块3
         win_compat_suggest.main()
     
     current_version = update_from_github.current_version()
@@ -135,6 +140,7 @@ def main():
     web_control.confirm_xxnet_not_running()
 
     import post_update
+    #模块4
     post_update.check()
 
     allow_remote=0
@@ -148,6 +154,7 @@ def main():
                 no_mess_system=1
     if allow_remote or config.allow_remote_connect:
         xlog.info("start with allow remote connect.")
+        #模块1第一次运行
         module_init.xargs["allow_remote"]=1
     if os.getenv("XXNET_NO_MESS_SYSTEM", "0")!="0" or no_mess_system or config.no_mess_system:
         xlog.info("start with no_mess_system, no CA will be imported to system.")
@@ -156,21 +163,26 @@ def main():
         restart_from_except=True
     else:
         restart_from_except=False
-    
+    #模块1第2次运行
     module_init.start_all_auto()
+    #模块2第1次运行
     web_control.start(allow_remote)
 
     if has_desktop and config.popup_webui==1 and not restart_from_except:
         host_port =config.control_port
         import webbrowser
+        #模块5
         webbrowser.open("http://localhost:%s/" % host_port)
-    
+    #模块6
     update.start()
     if has_desktop:
+        #模块7
         download_modules.start_dowload()
+    #模块8
     update_from_github.cleanup()
     
     if config.show_systray:
+        #模块9
         sys_platform.sys_tray.serve_forever()
     else:
         while True:
