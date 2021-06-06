@@ -134,9 +134,10 @@ def main():
         import win_compat_suggest
         # 模块3
         win_compat_suggest.main()
-    
+    # 模块8
     current_version = update_from_github.current_version()
     xlog.info("start XX-Net %s", current_version)
+    #模块2第一次运行
     web_control.confirm_xxnet_not_running()
 
     import post_update
@@ -165,7 +166,7 @@ def main():
         restart_from_except=False
     #模块1第2次运行
     module_init.start_all_auto()
-    #模块2第1次运行
+    #模块2第2次运行
     web_control.start(allow_remote)
 
     if has_desktop and config.popup_webui==1 and not restart_from_except:
