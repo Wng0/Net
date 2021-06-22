@@ -90,12 +90,15 @@ def call_each_module(api_name,args):
             api(args)
         except Exception as e:
             xlog.exception("call %s api:%s, except:%r",module, api_name,e)
+#入口函数,在./launcher/start.py中引用
 def start_all_auto():
     global running_file
     if not os.path.isfile(running_file):
         open(running_file,'a').close()
     for module in config.all_modules:
         if module in ["launcher"]:
+            continue
+        if not os.path.isdir(os.path.join(root_path,module)):
             continue
         if getattr(config,"enable_"+module):
             start_time=time.time()
