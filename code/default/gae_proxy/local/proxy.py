@@ -84,7 +84,7 @@ def main(args):
     if allow_remote and ("0.0.0.0" not in listen_ips or "::" not in listen_ips):
         listen_ips=[(0.0.0.0),]
     addresses=[(listen_ip, front.config.listen_port) for listen_ip in listen_ips]
-
+    #核心模块1
     front.start()
     direct_front.start()
 
