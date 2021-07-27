@@ -427,5 +427,125 @@ class CertUtil(object):
         if exist_ca_sha1 == ca_hash:
             xlog.info("GoAgent CA exist")
             return
-            
-            
+        
+        import_command = 'security add-trusted-cert -d -r trustRoot -k / Library/Keychains/System.keychain ../../../../data/gae_proxy/CA.crt' # % certfile.decode('utf-8')
+        if exist_ca_sha1:
+            delete_ca_command = 'security delete-certificate -Z %s' % exist_ca_sha1
+            exec_command = "%s;%s" % (delete_ca_command, import_command)
+        else:
+            exec_command = import_command
+        
+        admin_command = """osascript -e 'do shell script "%s" with adminiatrator privileges' """ % exec_command
+        cmd = admin_command.encode('utf-8')
+        xlog.info("try auto import CA command:%s", cmd)
+        os.system(cmd)
+
+    @staticmethod
+    def import_ca(certfile):
+        xlog.debug("Import CA")
+        commonname = "GoAgent xx-net - GoAgent" # TODO: here should be GOAgent -XX net
+        if sys.platform.startswith('win'):
+            CertUtil.import_windows_ca(certfile)
+        elif sys.platform == 'darwin':
+            CertUtil.import_mac_ca(commonname, certfile)
+        elif sys.platform.startswith('linux'):
+            CertUtil.import_linux_ca(commonname, certfile)
+            CertUtil.import_linux_firefox_ca(commonname,certfile)
+    
+    @staticmethod
+    def verify_certificate(ca, cert):
+        if hasattr(OpenSSL.crypto,"X509StoreContext"):
+            store = OpenSSL.crypto.X509Store()
+            store.add_cert(ca)
+            try:
+                OpenSSL.crypto.X509StoreContext(store, cert).verify_certificate()
+            except:
+                return False
+            else:
+                return True
+        else:
+            return ca.get_subject().OU == cert.get_issuer().OU
+    
+    @staticmethod
+    def init_ca(no_mess_system = 0):
+        # Check Certs Dir
+        if not os.path.exists(CertUtil.ca_certdir):
+            os.makedirs(CertUtil.ca_certdir)
+        
+        #Confirmed GoAgent CA exist
+        if not os.path.exists(CertUtil.ca_keyfile):
+            if os.path.exists(CertUtil.ca_certfile):
+                # update old unsafe CA file
+                xlog.info("update CA file storage format")
+                if hasattr(OpenSSL.crypto, "X509StoreContext"):
+                    os.rename(CertUtil.ca_certfile,CertUtil.ca_keyfile)
+                else:
+                    xlog.warning("users may need to re-import CA file")
+                    CertUtil.generate_ca_file()
+            else:
+                xlog.info("no GAE CA file exist in XX-net data dir")
+                xlog.info("clean old site certs in XX-net cert dir")
+                any(os.remove(x) for x in glob.glob(os.path.join(CertUtil.ca_certdir, '*.crt')) + glob.glob(os.path.join(CertUtil.ca_certdir, '*.crt')))
+
+                CertUtil.generate_ca_file()
+        
+        # Load GoAgent CA
+        with open(CertUtil.ca_keyfile, 'rb') as fp:
+            content = fp.read()
+        ca = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, content)
+        CertUtil.ca_privatekey = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, content)
+        CertUtil.ca_thumbprint = ca.digest('sha1')
+        CertUtil.ca_subject = ca.get_subject()
+        ca_cert_error = True
+        if os.path.exists(CertUtil.ca_certfile):
+            with open(CertUtil.ca_certfile, 'rb') as fp:
+                ca_cert_error = fp.read() not in content
+        if ca_cert_error:
+            with open(CertUtil.ca_certfile, 'wb') as fp:
+                fp.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, ca))
+        # Check cert keyfile exists
+        if hasattr(OpenSSL.crypto, "load_publickey"):
+            if os.path.exist(CertUtil.cert_keyfile):
+                with open(CertUtil.cert_keyfile, 'rb') as fp:
+                    CertUtil.cert_publickey = OpenSSL.crypto.load_publickey(OpenSSL.crypto.FILETYPE_PEM, fp.read())
+            else:
+                CertUtil.generate_cert_keyfile()
+        else:
+            CertUtil.cert_keyfile = None
+        
+        #Check exist site cert buffer with CA
+        certfiles = glob.glob(os.path.join(CertUtil.ca_certdir, '*.crt')) + glob.glob(os.path.join(CertUtil.ca_certdir, '.*.crt'))
+        if certfiles:
+            filename = random.choice(certfiles)
+            with open(filename,'rb') as fp:
+                cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, fp.read())
+            remove_certs = False
+            if not CertUtil.verify_certificate(ca,cert):
+                remove_certs = True
+            if not remove_certs and CertUtil.cert_publickey:
+                context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_METHOD)
+                try:
+                    context.use_certificate(cert)
+                    context.use_privatekey_file(CertUtil.cert_keyfile)
+                except OpenSSL.SSL.Error:
+                    remove_certs = True
+            if remove_certs:
+                xlog.info("clean old site certs in XX-net cert dir")
+                any(os.remove(x) for x in certfiles)
+        
+        if not no_mess_system:
+            CertUtil.import_ca(CertUtil.ca_keyfile)
+        
+        # change the status
+        # web_control / cert_import_status will return True, else return False
+        # Launcher will wait ready to open browser and check update
+        # config.cert_import_ready = True
+
+if __name__ == '__main__':
+    CertUtil.init_ca()
+
+#TODO:
+# CA common should be GO Agent, vander should be XX-net
+# need change and test on all support platform:
+Windows/mac/ubuntu/debian
+
