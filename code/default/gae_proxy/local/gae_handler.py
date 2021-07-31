@@ -120,5 +120,68 @@ def spawn_later(seconds, target, *args, **kwargs):
         return result
     return __import__('thread').start_new_thread(wrap,args,kwargs)
 
-skip_request_headers = frozenset([b'Vary', b'Via', b'Proxy-Authorization'])
+skip_request_headers = frozenset([b'Vary', b'Via', b'Proxy-Authorization', b'Proxy-Connection', b'Upgrade',b'X-Google-Cache-Control', b'X-Forwarded-For', b'X-Chrome-Variations',])
+skip_response_headers = frozenset([b'Connection', b'Upgrade',b'Alt-Svc',b'Alternate-Protocol', b'X-Head-Content-Length',b'X-Google-Cache-Control', b'X-Chrome-Variations',]) #http://en.wikipedia.org/wiki/Chunked_transfer_encoding
 
+def send_header(wfile,keyword,value):
+    keyword = keyword.title()
+    if keyword == b'Set-Cookie':
+        # https://cloud.google.com/appenginge/docs/python/urlfetch/responseobjects
+        for cookie in re.split(br',(?=[^ =]+(?:=|$))', value):
+            wfile.write(b"%s: %s\s\r\n" % (keyword, cookie))
+    elif keyword == b'Content-Disposition' and b'"' not in value:
+        value = re.sub(br'filename=([^"\']+)', b'filename="\\1"', value)
+        wfile.write(b"%s: %s\r\n" % (keyword, value))
+    elif keyword in skip_response_headers:
+        return
+    else:
+        if isinstance(value, int):
+            wfile.write(b"%s: %d\r\n" % (keyword, value))
+        else:
+            wfile.write(b"%s: %s\r\n") % (keyword, value))
+
+def send_response(wfile, status=404, headers={}, body=b''):
+    body = utils.to_bytes(body)
+    headers = dict((k.title(), v) for k, v in list(headers.item()))
+    if b'Transfer-Encoding' in headers:
+        del headers[b'Transfer-Encoding']
+    if b'Content-Length' not in headers:
+        headers[b'Content-Length'] = len(body)
+    if b'Connection not in headers':
+        headers[b'Connection'] = b'close'
+
+    try:
+        wfile.write(b"HTTP/1.1 %d\r\n" % status)
+        for key, value in list(headers.items()):
+            send_header(wfile,key, value)
+        wfile.write(b"\r\n")
+        wfile.write(body)
+    except ConnectionAbortedError as e:
+        xlog.warn("gae send response fail. %r",e)
+        return
+    except ConnectionResetError as e:
+        xlog.warn("gae send response fail: %r",e)
+        return
+    except BrokenPipeError as e:
+        xlog.warn("gae send response fail. %r",e)
+        return
+    except ssl.SSLError as e:
+        xlog.warn("gae send response fail. %r", e)
+        return
+    except Exception as e:
+        xlog.exception("send response fail %r", e)
+
+def return_fail_message(wfile):
+    html = generate_message_html('504 GAEProxy Proxy Time out', '连接超时,请先休息一下再来')
+    send_response(wfile, 504, body = html.encode('utf-8'))
+    return
+    
+def pack_request(method, url, headers, body, timeout):
+    headers = dict(headers)
+    if isinstance(body, bytes) and body:
+        if len(body) <10 * 1024 * 1024 and b'Content-Encoding' not in headers:
+            # 可以压缩
+            zbody = deflate(body)
+            if len(zbody)<len(body):
+                body = zbody
+                
