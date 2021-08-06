@@ -455,6 +455,22 @@ class ControlHandler(simple_http_server.HttpServerHandler):
                 addresses = line.split('|')
                 for ip in addresses:
                     ip = ip.strip()
+                    if not utils.check_ip_valid(ip):
+                        continue
+                    if front.ip_manager.add_ip(ip, 100, "google.com", "gws"):
+                        count +=1
+            data = '{"res":"%s"}' % count
+            front.ip_manager.save(force=True)
+        
+        elif reqs['cmd'] == ['exportip']:
+            data = '{"res":"'
+            for ip in front.ip_manager.ip_list:
+                if front.ip_manager.ip_dict[ip]['fail_times']>0:
+                    continue
+                data += "%s|" % ip
+            data = data[0: len(data)-1]
+            data += '"}'
+            
 
 
 
