@@ -316,7 +316,145 @@ class ControlHandler(simple_http_server.HttpServerHandler):
 
         try:
             if reqs['cmd'] == ['get_config']:
-                ret_config = {}
+                ret_config = {
+                    "appid": "|".join(config.GAE_APPIDS),
+                    "auto_adjust_scan_ip_thread_num": config.auto_adjust_scan_ip_thread_num,
+                    "scan_ip_thread_num": config.max_scan_ip_thread_num,
+                    "use_ipv6": config.use_ipv6,
+                    "setting_level": config.setting_level,
+                    "connect_receive_buffer": config.connect_receive_buffer,
+                }
+                data = json.dumps(ret_config, default=lambda o: o.__dict__)
+            elif reqs['cmd'] == ['set_config']:
+                appids = self.postvars['appid'][0]
+                if appids != "|".join(config.GAE_APPIDS):
+                    if appids and (front.ip_manager.good_ipv4_num + front.ip_manager.good_ipv6_num):
+                        fail_appid_list = test_appids(appids)
+                        if len(fail_appid_list):
+                            fail_appid = "|".join(fail_appid_list)
+                            data = json.dumps({"res": "fail", "reason": "appid fail:" + fail_appid})
+                            return
+                    
+                    appid_updated = True
+                    if appids:
+                        xlog.info("set appids:%s", appids)
+                        config.GAE_APPIDS = appids.split("|")
+                    else:
+                        config.GAE_APPIDS = []
+                
+                config.save()
+
+                config.load()
+                front.appid_manager.reset_appid()
+                if appid_updated:
+                    front.http_dispatcher.close_all_worker()
+                
+                front.ip_manager.reset()
+
+                data = '{"res":"success:"}'
+            elif reqs['cmd'] == ['set_config_level']:
+                setting_level = self.postvars['setting_level'][0]
+                if setting_level:
+                    xlog.info("set global config level to %s", setting_level)
+                    config.set_level(setting_level)
+                    direct_config.set_level(setting_level)
+                    front.ip_manager.load_config()
+                    front.ip_manager.adjust_scan_thread_num()
+                    front.ip_manager.remove_slowest_ip()
+                    front.ip_manager.search_more_ip()
+                
+                connect_receive_buffer = int(self.postvars['connect_receive_buffer'][0])
+                if 8192 <= connect_receive_buffer <= 2097152 and connect_receive_buffer != config.connect_receive_buffer:
+                    xlog.info("set connect receive buffer to %dKB", connect_receive_buffer // 1024)
+                    config.connect_receive_buffer = connect_receive_buffer
+                    config.save()
+                    config.load()
+
+                    front.connect_manager.new_conn_pool.clear()
+                    direct_front.connect_manager.new_conn_pool.clear()
+                    front.http_dispatcher.close_all_worker()
+                    for _, http_dispatcher in list(direct_front.dispatchs.item()):
+                        http_dispatcher.close_all_worker()
+                
+                data = '{"res": "success"}'
+        except Exception as e:
+            xlog.exception("req_config_handler except:%s", e)
+            data = '{"res":"fail", "except":"%s"}' % e
+        finally:
+            self.send_response_nc('text/html', data)
+    
+    def req_deploy_handler(self):
+        global deploy_proc
+        req = urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        data = ''
+
+        log_path = os.path.abspath(os.path.join(current_path, os.pardir, "server", 'upload.log'))
+        time_now = datatime.datetime.today().strftime('%H:%M:%S-%a/%d/%b/%Y')
+
+        if reqs['cmd'] == ['deploy']:
+            appid = self.postvars['appid'][0]
+            debug = int(self.postvars['debug'][0])
+            if deploy_proc and deploy_proc.poll() ==None:
+                xlog.warn("deploy is running, request denied.")
+                data = '{"res":"deploy is running", "time":"%s"}' % time_now
+            
+            else:
+                try:
+                    download_gae_lib.check_lib_or_download()
+
+                    if os.path.isfile(log_path):
+                        os.remove(log.path)
+                    script_path = os.path.abspath(os.path.join(current_path, os.pardir, "sever", 'uploader.py'))
+
+                    args = [sys.executable, script_path, appid]
+                    if debug:
+                        args.append("-debug")
+                    
+                    deploy_proc = subprocess.Popen(args)
+                    xlog.info("deploy begin.")
+                    data = '{"res":"success", "time":"%s"}' % time_now
+                except Exception as e:
+                    data = '{"res":"%s", "time":"%s"}' % (e, time_now)
+        
+        elif reqs['cmd'] == ['cancel']:
+            if deploy_proc and deploy_proc.poll() == None:
+                deploy_proc.kill()
+                data = '{"res":"deploy is killed", "time":"%s"}' % time_now
+            else:
+                data = '{"res":"deploy is not running", "time":"%s"}' % time_now
+        
+        elif reqs['cmd'] == ['get_log']:
+            if deploy_proc and os.path.isfile(log_path):
+                with open(log_path,"r") as f:
+                    content = f.read()
+            else:
+                content = ""
+            
+            status = 'init'
+            if deploy_proc:
+                if deploy_proc.poll() == None:
+                    status = 'running'
+                else:
+                    status = 'finished'
+            
+            data = json.dumps({'status': status, 'log': content, 'time': time_now})
+        
+        self.send_response_nc('text/html', data)
+    
+    def req_importip_handler(self):
+        req = urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        data = ''
+
+        if reqs['cmd'] == ['importip']:
+            count = 0
+            ip_list = self.postvars['ipList'][0]
+            lines = ip_list.split("\n")
+            for line in lines:
+                addresses = line.split('|')
+                for ip in addresses:
+                    ip = ip.strip()
 
 
 
