@@ -390,7 +390,7 @@ class ControlHandler(simple_http_server.HttpServerHandler):
         data = ''
 
         log_path = os.path.abspath(os.path.join(current_path, os.pardir, "server", 'upload.log'))
-        time_now = datatime.datetime.today().strftime('%H:%M:%S-%a/%d/%b/%Y')
+        time_now = datetime.datetime.today().strftime('%H:%M:%S-%a/%d/%b/%Y')
 
         if reqs['cmd'] == ['deploy']:
             appid = self.postvars['appid'][0]
@@ -470,10 +470,244 @@ class ControlHandler(simple_http_server.HttpServerHandler):
                 data += "%s|" % ip
             data = data[0: len(data)-1]
             data += '"}'
+        
+        self.send_response_nc('text/html', data)
+    
+    def req_test_ip_handler(self):
+        req = urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+
+        ip = reqs['ip'][0]
+        result = front.check_ip.check_ip(ip)
+        if not result or not result.ok:
+            data = "{'res':'fail'}"
+        else:
+            data = json.dumps("{'ip':'%s', 'handshake':'%s', 'server':'%s', 'domain':'%s'}" % (ip, result.handshake_time, result.server_type, result.domain))
+        
+        self.send_response_nc('text/html', data)
+    
+    def req_ip_list_handler(self):
+        time_now = time.time()
+        data = "<html><body><div style='float: left; white-space:nowrap;font-family: monospace;'>"
+        data += "time:%d pointer:%d<br>\r\n" % (time_now, front.ip_manager.ip_pointer)
+        data += "<table><tr><th>N</th><th>links</th>"
+        data += "<th>down_fail</th><th>links</th>"
+        data += "<th>get_time</th><th>success_time</th><th>fail_time</th><th>down_fail_time</th>"
+        data += "<th>data_active</th><th>transfered_data</th><th>Trans</th>"
+        data += "<th>history</th></th>\n"
+        i = 1
+        for ip in front.ip_manager.gws_ip_list:
+            handshake_time = front.ip_manager.ip_dict[ip]["handshake_time"]
+
+            fail_time = front.ip_manager.ip_dict[ip]["fail_times"]
+            down_fail = front.ip_manager.ip_dict[ip]["down_fail"]
+            links = front.ip_manager.ip_dict[ip]["links"]
+
+            get_time = front.ip_manager.ip_dict[ip]["get_time"]
+            if get_time:
+                get_time = time_now - get_time
             
+            success_time = front.ip_manager.ip_dict[ip]["success_time"]
+            if success_time:
+                success_time = time_now - success_time
+            
+            fail_time = front.ip_manager.ip_dict[ip]["fail_time"]
+            if fail_time:
+                fail_time = time_now - fail_time
+            
+            down_fail_time = front.ip_manager.ip_dict[ip]["down_fail_time"]
+            if down_fail_time:
+                down_fail_time = time_now - down_fail_time
+            
+            data_active = front.ip_manager.ip_dict[ip]["data_active"]
+            if data_active:
+                active_time = time_now - data_active
+            else:
+                active_time = 0
+            
+            history = front.ip_manager.ip_dict[ip]["history"]
+            t0 = 0
+            str_out = ''
+            for item in history:
+                t = item[0]
+                v = item[1]
+                if t0 == 0:
+                    t0 = t
+                time_per = int((t-t0)*1000)
+                t0 = t
+                str_out += "%d(%s) " % (time_per, v)
+            data += "<tr><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td>" "<td>%d</td><td>%d</td><td>%s</td></tr>\n" % (i, ip, handshake_time, fail_times, down_fail, links, get_time, success_time, fail_time, down_fail_time, active_time, str_out)
+            i += 1
+        
+        data += "</table></div></body></html>"
+        mimetype = 'text/html'
+        self.send_response_nc(mimetype, data)
+    
+    def req_scan_ip_handler(self):
+        req = urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        data = ""
+        if reqs['cmd'] == ['get_range']:
+            data = front.ipv4_source.load_range_content()
+        elif reqs['cmd'] == ['update']:
+            # update ip_range if needed
+            content = self.postvars['ip_range'][0]
 
+            #check ip_range checksums, update if needed
+            default_digest = hashlib.md5(utils.to_bytes(front.ipv4_source.load_range_content(default=True))).hexdigest()
+            old_digest = hashlib.md5(utils.to_bytes(front.ipv4_source.load_range_content())).hexdigest()
+            new_digest = hashlib.md5(utils.to_bytes(content)).hexdigest()
 
+            if new_digest == default_digest:
+                front.ipv4_source.remove_user_range()
+            
+            else:
+                if old_digest != new_digest:
+                    front.ipv4_source.update_range_content(content)
+            
+            if old_digest !=new_digest:
+                front.ipv4_source.load_ip_range()
+            
+            #update auto_adjust_scan_ip and scan_ip_thread_num
+            should_auto_adjust_scan_ip = int(self.postvars['auto_adjust_scan_ip_thread_num'][0])
+            thread_num_for_scan_ip = int(self.postvars['scan_ip_thread_num'][0])
 
+            use_ipv6 = self.postvars['use_ipv6'][0]
+            if config.use_ipv6 != use_ipv6:
+                xlog.debug("use_ipv6 change to %s", use_ipv6)
+                config.use_ipv6 = use_ipv6
+            
+            #update user config settings
+            config.auto_adjust_scan_ip_thread_num = should_auto_adjust_scan_ip
+            config.max_scan_ip_thread_num = thread_num_for_scan_ip
+            config.save()
+            config.load()
 
+            front.ip_manager.adjust_scan_thread_num()
 
+            #reponse
+            data = '{"res":"success"}'
+        
+        mimetype = 'text/plain'
+        self.send_response_nc(mimetype, data)
+    
+    def req_ssl_pool_handler(self):
+        data = "New conn:\n"
+        data += front.connect_manager.new_conn_pool.to_string()
 
+        for host in front.connect_manager.host_conn_pool:
+            data += "\nHost:%s\n" % host
+            data += front.connect_manager.host_conn_pool[host].to_string()
+        
+        mimetype = 'text/plain'
+        self.send_response_nc(mimetype, data)
+    
+    def req_workers_handler(self):
+        data = front.http_dispatcher.to_string()
+
+        mimetype = 'text/plain'
+        self.send_response_nc(mimetype, data)
+    
+    def req_download_cert_handler(self):
+        filename = cert_util.CertUtil.ca_keyfile
+        with open(filename, 'rb') as fp:
+            data = fp.read()
+        mimetype = 'application/x-x509-ca-cert'
+
+        self.wfile.write(('HTTP/1.1 200\r\nContent-Disposition: inline; filename=CA.crt\r\nContent-Type: %s\r\nContent-Length: %s\r\n\r\n' % (mimetype, len(data))).encode())
+        self.wfile.write(data)
+    
+    def req_check_ip_handler(self):
+        req= urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        data = ""
+        if reqs['cmd'] == ['get_process']:
+            all_ip_num = len(front.ip_manager.ip_dict)
+            left_num = front.ip_manager.scan_exist_ip_queue.qsize()
+            good_num = (front.ip_manager.good_ipv4_num + front.ip_manager.good_ipv6_num)
+            data = json.dumps(dict(all_ip_num=all_ip_num, left_num=left_num, good_num=good_num))
+            self.send_response_nc('text/plain', data)
+        elif reqs['cmd'] == ['start']:
+            left_num = front.ip_manager.scan_exist_ip_queue.qsize()
+            if left_num:
+                self.send_response_nc('text/plain', '{"res":"fail", "reason":"running"}')
+            else:
+                front.ip_manager.start_scan_all_exist_ip()
+                self.send_response_nc('text/plain', '{"res":"success"}')
+        elif reqs['cmd'] == ['stop']:
+            left_num = front.ip_manager.scan_exist_ip_queue.qsize()
+            if not left_num:
+                self.send_response_nc('text/plan', '{"res":"fail", "reason":"not running"}')
+            else:
+                front.ip_manager.stop_scan_all_exist_ip()
+                self.send_response_nc('text/plain', '{"res":"success"}')
+        else:
+            return self.send_not_exist()
+    
+    def req_debug_handler(self):
+        data = ""
+        for obj in [front.connect_manager,front.http_dispatcher]:
+            data += "%s\r\n" % obj.__class__
+            for attr in dir(obj):
+                if attr.startswith("__"):
+                    continue
+                data += "    %s = %s\r\n" % (attr, getattr(obj, attr))
+        
+        mimetype = 'text/plain'
+        self.send_response_nc(mimetype,data)
+    
+    def req_ipv6_tunnel_handler(self):
+        req = urllib.parse.urlparse(self.path).query
+        reqs = urllib.parse.parse_qs(req, keep_blank_values = True)
+        data = ''
+
+        log_path = os.path.join(data_path, "ipv6_tunnel.log")
+        time_now = datetime.datetime.today().strftime('%H:%M%S-%a/%d/%b/%Y')
+
+        client_ip =self.client_address[0]
+        is_local = client_ip.endswith("127.0.0.1") or client_ip == "::1"
+
+        if reqs['cmd'] in [['enable'], ['disable'], ['test_teredo'], ['test_teredo_usability'],['test_teredo_server'], ['set_best_server']]:
+            cmd = reqs['cmd'][0]
+            xlog.info("ipv6_tunnel switch %s", cmd)
+
+            #Do not remove log file at here.
+
+            if cmd == "enable":
+                result = ipv6_tunnel.enable(is_local)
+            elif cmd == "disable":
+                result = ipv6_tunnel.disable(is_local)
+            elif cmd == "test_teredo":
+                result = ipv6_tunnel.test_teredo()
+            elif cmd == "test_teredo_usability":
+                result = ipv6_tunnel.test_teredo(probe_server=False)
+            elif cmd == "test_teredo_server":
+                result = ipv6_tunnel.test_teredo(probe_nat=False)
+            elif cmd == "set_best_server":
+                result = ipv6_tunnel.set_best_server(is_local)
+            else:
+                xlog.warn("unknown cmd:%s", cmd)
+            
+            xlog.info("ipv6_tunnel switch %s, result: %s", cmd, result)
+
+            data = json.dumps({'res': result, 'time': time_now})
+        
+        elif reqs['cmd'] == ['get_log']:
+            if os.path.isfile(log_path):
+                with open(log_path, "r") as f:
+                    with open(log_path, "r") as f:
+                        content = f.read()
+            else:
+                content = ""
+            
+            status = ipv6_tunnel.state()
+
+            data = json.dumps({'status': status, 'log': content, 'time': time_now})
+        
+        elif reqs['cmd'] == ['get_priority']:
+            data = json.dumps({'res': ipv6_tunnel.state_pp(), 'time': time_now})
+        
+        elif reqs['cmd'] == ['switch_pp']:
+            data = json.dumps({'res': ipv6_tunnel.switch_pp(), 'time': time_now})
+        
+        self.send_response_nc('text/html', data)

@@ -547,5 +547,5 @@ if __name__ == '__main__':
 #TODO:
 # CA common should be GO Agent, vander should be XX-net
 # need change and test on all support platform:
-Windows/mac/ubuntu/debian
+# Windows/mac/ubuntu/debian
 
